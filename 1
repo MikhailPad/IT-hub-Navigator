@@ -1,0 +1,111 @@
+import telebot
+from telebot import types
+import json
+import os
+
+TOKEN = "8275694616:AAHjtvUNoN6A_kzgMMEd2xqDcdVTHI8Fqws"
+bot = telebot.TeleBot(TOKEN)
+
+
+# Клавиатуры
+def kb_main():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row("🏢 ИТ-хаб")
+    kb.row("🎓 УУНиТ")
+    return kb
+
+
+def kb_cat():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row("⚽ Спорт", "💻 Коворкинг")
+    kb.row("✨ Особые зоны")
+    kb.row("◀️ Назад")
+    return kb
+
+
+def kb_actions():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row("📅 События", "🏆 Рейтинг")
+    kb.row("📍 Локации")
+    kb.row("◀️ Назад")
+    return kb
+
+
+def kb_locations(cat):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    if cat == "Спорт":
+        kb.row("🎾 Теннис", "⚽ Настольный футбол")
+        kb.row("🏋️ Фитнес")
+    elif cat == "Коворкинг":
+        kb.row("📚 Тихая зона", "💬 Переговорная")
+        kb.row("🛋️ Пуфики")
+    else:
+        kb.row("🥽 VR", "🎮 Приставки")
+        kb.row("🎨 Мастер-классы")
+    kb.row("◀️ Назад")
+    return kb
+
+
+# Переменные
+user_state = {}
+
+
+# Команды
+@bot.message_handler(commands=['start'])
+def start(m):
+    user_state[m.chat.id] = {}
+    bot.send_message(m.chat.id, "✨ Привет! Я навигатор по ИТ-хабу Т-Банк", reply_markup=kb_main())
+
+
+@bot.message_handler(func=lambda m: m.text == "🏢 ИТ-хаб")
+def it_hub(m):
+    user_state[m.chat.id] = {"menu": "cat"}
+    bot.send_message(m.chat.id, "🏢 ИТ-хаб\n\nВыбери направление:", reply_markup=kb_cat())
+
+
+@bot.message_handler(func=lambda m: m.text == "🎓 УУНиТ")
+def uni(m):
+    text = "🎓 УУНиТ\n\n📅 Пн-Пт 9:00-18:00\n🏢 Ауд. 101-105, 201-210"
+    bot.send_message(m.chat.id, text, reply_markup=kb_main())
+
+
+@bot.message_handler(func=lambda m: m.text in ["⚽ Спорт", "💻 Коворкинг", "✨ Особые зоны"])
+def category(m):
+    user_state[m.chat.id] = {"menu": "actions", "cat": m.text}
+    bot.send_message(m.chat.id, f"👉 {m.text}\n\nЧто хочешь?", reply_markup=kb_actions())
+
+
+@bot.message_handler(func=lambda m: m.text == "📍 Локации")
+def locations(m):
+    cat = user_state.get(m.chat.id, {}).get("cat", "")
+    bot.send_message(m.chat.id, f"📍 Локации:", reply_markup=kb_locations(cat))
+
+
+@bot.message_handler(
+    func=lambda m: m.text in ["🎾 Теннис", "⚽ Настольный футбол", "🏋️ Фитнес", "📚 Тихая зона", "💬 Переговорная",
+                              "🛋️ Пуфики", "🥽 VR", "🎮 Приставки", "🎨 Мастер-классы"])
+def location(m):
+    loc = m.text
+    user_state[m.chat.id]["loc"] = loc
+    text = f"📍 {loc}\n\n🔹 События\n🔹 Предложить движ\n🔹 Отзывы"
+    bot.send_message(m.chat.id, text, reply_markup=kb_locations(user_state[m.chat.id].get("cat", "")))
+
+
+# Назад
+@bot.message_handler(func=lambda m: m.text == "◀️ Назад")
+def back(m):
+    state = user_state.get(m.chat.id, {})
+    menu = state.get("menu", "")
+
+    if menu == "cat":
+        start(m)
+    elif menu == "actions":
+        it_hub(m)
+    else:
+        cat = state.get("cat", "")
+        if cat:
+            bot.send_message(m.chat.id, f"👉 {cat}\n\nЧто хочешь?", reply_markup=kb_actions())
+
+
+print("Бот запущен")
+bot.infinity_polling()
