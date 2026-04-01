@@ -1,0 +1,565 @@
+import telebot
+from telebot import types
+import json
+import os
+from datetime import datetime
+
+# ==================== КОНФИГУРАЦИЯ ====================
+TOKEN = ""
+bot = telebot.TeleBot(TOKEN)
+
+# Файлы для хранения данных
+USERS_FILE = "users.json"
+EVENTS_FILE = "events.json"
+REVIEWS_FILE = "reviews.json"
+
+
+# ==================== ЗАГРУЗКА/СОХРАНЕНИЕ ДАННЫХ ====================
+def load_users():
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+
+def save_users(users):
+    with open(USERS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(users, f, ensure_ascii=False, indent=2)
+
+
+def load_events():
+    if os.path.exists(EVENTS_FILE):
+        with open(EVENTS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+
+def save_events(events):
+    with open(EVENTS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(events, f, ensure_ascii=False, indent=2)
+
+
+def load_reviews():
+    if os.path.exists(REVIEWS_FILE):
+        with open(REVIEWS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    return {}
+
+
+def save_reviews(reviews):
+    with open(REVIEWS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(reviews, f, ensure_ascii=False, indent=2)
+
+
+# Глобальные переменные
+users = load_users()
+events = load_events()
+reviews = load_reviews()
+
+# ==================== НАВИГАЦИОННЫЙ СТЕК ====================
+user_stack = {}
+
+
+def get_stack(user_id):
+    user_id = str(user_id)
+    if user_id not in user_stack:
+        user_stack[user_id] = []
+    return user_stack[user_id]
+
+
+def push_menu(user_id, menu_name, text, keyboard, location=None):
+    stack = get_stack(user_id)
+    stack.append({
+        "menu": menu_name,
+        "text": text,
+        "keyboard": keyboard,
+        "location": location
+    })
+
+
+def pop_menu(user_id):
+    stack = get_stack(user_id)
+    if len(stack) > 1:
+        stack.pop()
+        return stack[-1]
+    return None
+
+
+def clear_stack(user_id):
+    user_stack[str(user_id)] = []
+
+
+def get_current_location(user_id):
+    stack = get_stack(user_id)
+    if stack:
+        return stack[-1].get("location")
+    return None
+
+
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+def add_points(user_id, points, category):
+    user_id = str(user_id)
+    if user_id not in users:
+        users[user_id] = {"points": 0, "username": "", "location": "", "category": ""}
+    users[user_id]["points"] += points
+    users[user_id]["category"] = category
+    save_users(users)
+
+
+def get_leaderboard(category):
+    leaderboard = []
+    for uid, data in users.items():
+        if data.get("points", 0) > 0:
+            leaderboard.append({
+                "username": data.get("username", "Аноним"),
+                "points": data.get("points", 0)
+            })
+    leaderboard.sort(key=lambda x: x["points"], reverse=True)
+    return leaderboard[:10]
+
+
+# ==================== КЛАВИАТУРЫ ====================
+def main_keyboard():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row("📍 ИТ-хаб Т-Банк")
+    kb.row("🏫 Корпус УУНиТ")
+    return kb
+
+
+def categories_keyboard():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row("⚽️ Спортивные зоны", "💻 Зоны коворкинга")
+    kb.row("✨ Особые зоны")
+    kb.row("🔙 Назад")
+    return kb
+
+
+def category_actions_keyboard(category):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row("📅 Все мероприятия", "🏆 Таблица лидеров")
+    kb.row("📋 Список локаций")
+    kb.row("🔙 Назад")
+    return kb
+
+
+def locations_keyboard(category):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    if category == "⚽️ Спортивные зоны":
+        kb.row("🎾 Теннис (1 этаж)", "⚽ Настольный футбол (3 этаж)")
+        kb.row("🏋️ Фитнес-угол (2 этаж)")
+    elif category == "💻 Зоны коворкинга":
+        kb.row("📚 Тихая зона (2 этаж)", "💬 Переговорная A (3 этаж)")
+        kb.row("🛋️ Пуфики (1 этаж)")
+    elif category == "✨ Особые зоны":
+        kb.row("🥽 VR-зона (2 этаж)", "🎮 Игровые приставки (3 этаж)")
+        kb.row("🎨 Зона мастер-классов (1 этаж)")
+    kb.row("🔙 Назад")
+    return kb
+
+
+def location_actions_keyboard(location):
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("📅 События", callback_data=f"events_{location}"),
+        types.InlineKeyboardButton("💡 Предложить движ", callback_data=f"suggest_{location}")
+    )
+    kb.add(
+        types.InlineKeyboardButton("💬 Лента отзывов", callback_data=f"reviews_{location}"),
+        types.InlineKeyboardButton("📝 Оставить отзыв (+5⭐)", callback_data=f"review_{location}")
+    )
+    kb.add(types.InlineKeyboardButton("🔙 Назад в меню", callback_data=f"back_to_locations"))
+    return kb
+
+
+def suggestion_templates_keyboard(location):
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(
+        types.InlineKeyboardButton("🏆 Турнир на вылет", callback_data=f"template_{location}_Турнир на вылет"),
+        types.InlineKeyboardButton("🤝 Дружеский матч", callback_data=f"template_{location}_Дружеский матч"),
+        types.InlineKeyboardButton("📚 Мастер-класс", callback_data=f"template_{location}_Мастер-класс"),
+        types.InlineKeyboardButton("🎉 Вечеринка", callback_data=f"template_{location}_Вечеринка"),
+        types.InlineKeyboardButton("✏️ Написать свой вариант", callback_data=f"custom_{location}")
+    )
+    kb.add(types.InlineKeyboardButton("🔙 Назад к локации", callback_data=f"back_to_location_{location}"))
+    return kb
+
+
+def back_keyboard():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row("🔙 Назад")
+    return kb
+
+
+def waiting_keyboard():
+    """Клавиатура для ожидания ввода (с кнопкой отмены)"""
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.row("❌ Отмена")
+    return kb
+
+
+def remove_keyboard():
+    """Убирает клавиатуру"""
+    return types.ReplyKeyboardRemove()
+
+
+# ==================== ОТПРАВКА СООБЩЕНИЙ ====================
+def send_menu(message, text, keyboard, menu_name):
+    user_id = str(message.chat.id)
+    push_menu(user_id, menu_name, text, keyboard)
+    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=keyboard)
+
+
+def return_to_location(message, location):
+    """Возвращает пользователя в карточку локации"""
+    text = f"📍 *{location}*\n\nЗдесь ты можешь:\n• 📅 Посмотреть события\n• 💡 Предложить движ\n• 💬 Лента отзывов\n• 📝 Оставить отзыв (+5 баллов)"
+    push_menu(str(message.chat.id), "location_detail", text, None, location)
+    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=location_actions_keyboard(location))
+
+
+# ==================== ОБРАБОТЧИКИ ====================
+@bot.message_handler(commands=['start'])
+def start(message):
+    user_id = str(message.from_user.id)
+    if user_id not in users:
+        users[user_id] = {
+            "points": 0,
+            "username": message.from_user.username or message.from_user.first_name,
+            "location": "",
+            "category": ""
+        }
+        save_users(users)
+
+    clear_stack(user_id)
+
+    text = (
+        "✨ *Привет, друг! Добро пожаловать в ИТ-хаб Т-Банк!* ✨\n\n"
+        "Я твой помощник по всем активностям хаба. Расскажу, где что происходит, "
+        "помогу найти компанию для тенниса или записаться на мастер-класс.\n\n"
+        "А ещё за активность тут дают баллы — можно стать *Героем Хаба*! 🏆\n\n"
+        "👇 *Для начала выбери локацию:*"
+    )
+    send_menu(message, text, main_keyboard(), "main")
+
+
+@bot.message_handler(func=lambda m: m.text == "📍 ИТ-хаб Т-Банк")
+def it_hub(message):
+    text = (
+        "🏢 *ИТ-хаб Т-Банк* — место, где технологии встречаются с комфортом!\n\n"
+        "👉 *Выбери направление, которое тебя интересует:*"
+    )
+    send_menu(message, text, categories_keyboard(), "categories")
+
+
+@bot.message_handler(func=lambda m: m.text == "🏫 Корпус УУНиТ")
+def university(message):
+    text = (
+        "🏫 *Корпус УУНиТ*\n\n"
+        "📚 *Расписание пар:*\n"
+        "• Понедельник-пятница: 9:00 - 18:00\n"
+        "• Суббота: 10:00 - 14:00\n\n"
+        "🏢 *Аудитории:*\n"
+        "• 101-105 — лекционные залы\n"
+        "• 201-210 — компьютерные классы\n"
+        "• 301-305 — лаборатории\n\n"
+        "🔧 *IT-лаборатории:*\n"
+        "• Лаборатория ИИ (ауд. 202)\n"
+        "• Кибербезопасность (ауд. 205)"
+    )
+    send_menu(message, text, back_keyboard(), "university")
+
+
+@bot.message_handler(func=lambda m: m.text in ["⚽️ Спортивные зоны", "💻 Зоны коворкинга", "✨ Особые зоны"])
+def category_selected(message):
+    category = message.text
+    user_id = str(message.from_user.id)
+    users[user_id]["category"] = category
+    save_users(users)
+
+    text = f"👉 *{category}*\n\nВыбери действие:"
+    send_menu(message, text, category_actions_keyboard(category), "category_actions")
+
+
+@bot.message_handler(func=lambda m: m.text == "📅 Все мероприятия")
+def all_events(message):
+    user_id = str(message.from_user.id)
+    category = users.get(user_id, {}).get("category", "")
+
+    category_events = [e for e in events.values() if e.get("category") == category]
+
+    if not category_events:
+        text = f"📭 *В {category} пока нет запланированных мероприятий*\n\nБудь первым, кто предложит движ! 💪"
+    else:
+        text = f"*📅 Все мероприятия в {category}*\n\n"
+        for event in category_events[:10]:
+            text += f"🔹 *{event['title']}*\n   📍 {event['location']}\n   🕐 {event['datetime']}\n   👥 {event.get('participants', 0)} участников\n\n"
+
+    send_menu(message, text, back_keyboard(), "events")
+
+
+@bot.message_handler(func=lambda m: m.text == "🏆 Таблица лидеров")
+def leaderboard(message):
+    user_id = str(message.from_user.id)
+    category = users.get(user_id, {}).get("category", "")
+    leaderboard_data = get_leaderboard(category)
+
+    if not leaderboard_data:
+        text = f"🏆 *Таблица лидеров в {category}*\n\nПока никого нет. Стань первым Героем Хаба! 💪"
+    else:
+        text = f"🏆 *Таблица лидеров — {category}*\n\n"
+        medals = ["🥇", "🥈", "🥉"]
+        for i, entry in enumerate(leaderboard_data):
+            medal = medals[i] if i < 3 else f"{i + 1}."
+            text += f"{medal} *{entry['username']}* — {entry['points']} баллов\n"
+
+    send_menu(message, text, back_keyboard(), "leaderboard")
+
+
+@bot.message_handler(func=lambda m: m.text == "📋 Список локаций")
+def locations_list(message):
+    user_id = str(message.from_user.id)
+    category = users.get(user_id, {}).get("category", "")
+    text = f"📍 *Выбери локацию в {category}:*"
+    send_menu(message, text, locations_keyboard(category), "locations")
+
+
+# ==================== ВСЕ ЛОКАЦИИ ====================
+ALL_LOCATIONS = [
+    "🎾 Теннис (1 этаж)", "⚽ Настольный футбол (3 этаж)", "🏋️ Фитнес-угол (2 этаж)",
+    "📚 Тихая зона (2 этаж)", "💬 Переговорная A (3 этаж)", "🛋️ Пуфики (1 этаж)",
+    "🥽 VR-зона (2 этаж)", "🎮 Игровые приставки (3 этаж)", "🎨 Зона мастер-классов (1 этаж)"
+]
+
+
+@bot.message_handler(func=lambda m: m.text in ALL_LOCATIONS)
+def location_detail(message):
+    location = message.text
+    text = f"📍 *{location}*\n\nЗдесь ты можешь:\n• 📅 Посмотреть события\n• 💡 Предложить движ\n• 💬 Лента отзывов\n• 📝 Оставить отзыв (+5 баллов)"
+
+    push_menu(str(message.chat.id), "location_detail", text, None, location)
+    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=location_actions_keyboard(location))
+
+
+# ==================== УНИВЕРСАЛЬНАЯ КНОПКА НАЗАД ====================
+@bot.message_handler(func=lambda m: m.text == "🔙 Назад")
+def back_handler(message):
+    user_id = str(message.chat.id)
+    previous = pop_menu(user_id)
+
+    if previous:
+        bot.send_message(
+            message.chat.id,
+            previous["text"],
+            parse_mode="Markdown",
+            reply_markup=previous["keyboard"]
+        )
+    else:
+        start(message)
+
+
+# ==================== КНОПКА ОТМЕНЫ ====================
+@bot.message_handler(func=lambda m: m.text == "❌ Отмена")
+def cancel_handler(message):
+    user_id = str(message.chat.id)
+    location = get_current_location(user_id)
+
+    # Убираем клавиатуру "Отмена"
+    bot.send_message(message.chat.id, "❌ Отменено", reply_markup=remove_keyboard())
+
+    if location:
+        # Возвращаемся в карточку локации
+        return_to_location(message, location)
+    else:
+        # Если нет сохранённой локации, возвращаемся в главное меню
+        start(message)
+
+
+# ==================== CALLBACK ОБРАБОТЧИКИ ====================
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    data = call.data
+    user_id = str(call.from_user.id)
+
+    if data.startswith("events_"):
+        location = data.replace("events_", "")
+        location_events = [e for e in events.values() if e.get("location") == location]
+
+        if not location_events:
+            text = f"📭 *Нет запланированных событий в {location}*"
+        else:
+            text = f"📅 *События в {location}*\n\n"
+            for event in location_events:
+                text += f"🔹 *{event['title']}*\n   🕐 {event['datetime']}\n   👥 {event.get('participants', 0)} участников\n\n"
+
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔙 Назад к локации", callback_data=f"back_to_location_{location}"))
+
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown",
+                              reply_markup=kb)
+        bot.answer_callback_query(call.id)
+
+    elif data.startswith("suggest_"):
+        location = data.replace("suggest_", "")
+        bot.edit_message_text(
+            f"💡 *Что хочешь предложить в {location}?*",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown",
+            reply_markup=suggestion_templates_keyboard(location)
+        )
+        bot.answer_callback_query(call.id)
+
+    elif data.startswith("template_"):
+        parts = data.split("_", 2)
+        location = parts[1]
+        template = parts[2]
+
+        event_id = f"event_{datetime.now().timestamp()}"
+        events[event_id] = {
+            "title": template,
+            "location": location,
+            "category": users.get(user_id, {}).get("category", ""),
+            "datetime": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "participants": 0,
+            "description": "Предложено пользователем"
+        }
+        save_events(events)
+        add_points(user_id, 10, users.get(user_id, {}).get("category", ""))
+
+        text = f"✅ *Твоё предложение «{template}» отправлено на модерацию!*\n💰 *+10 баллов!*"
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔙 Назад к локации", callback_data=f"back_to_location_{location}"))
+
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown",
+                              reply_markup=kb)
+        bot.answer_callback_query(call.id, "✅ Предложение отправлено!")
+
+    elif data.startswith("custom_"):
+        location = data.replace("custom_", "")
+        bot.edit_message_text(
+            f"✏️ *Напиши свой вариант события для {location}:*\n\nУкажи название, время, количество участников:",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+        bot.send_message(call.message.chat.id, "Напиши свой вариант (или нажми ❌ Отмена)",
+                         reply_markup=waiting_keyboard())
+        bot.register_next_step_handler_by_chat_id(call.message.chat.id, process_custom_suggestion, location,
+                                                  call.message.chat.id)
+        bot.answer_callback_query(call.id)
+
+    elif data.startswith("reviews_"):
+        location = data.replace("reviews_", "")
+        location_reviews = {k: v for k, v in reviews.items() if v.get("location") == location}
+
+        if not location_reviews:
+            text = f"💬 *Лента отзывов — {location}*\n\n📭 Пока нет отзывов. Будь первым! 📝"
+            kb = types.InlineKeyboardMarkup()
+            kb.add(types.InlineKeyboardButton("🔙 Назад к локации", callback_data=f"back_to_location_{location}"))
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown",
+                                  reply_markup=kb)
+        else:
+            text = f"💬 *Лента отзывов — {location}*\n\n"
+            for review in list(location_reviews.values())[-5:]:
+                text += f"👤 *{review['username']}*\n📝 {review['text']}\n❤️ {len(review.get('likes', []))} лайков\n\n"
+
+            kb = types.InlineKeyboardMarkup()
+            for review_id, review in list(location_reviews.items())[-3:]:
+                kb.add(
+                    types.InlineKeyboardButton(f"❤️ Лайкнуть {review['username']}", callback_data=f"like_{review_id}"))
+            kb.add(types.InlineKeyboardButton("🔙 Назад к локации", callback_data=f"back_to_location_{location}"))
+
+            bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown",
+                                  reply_markup=kb)
+
+        bot.answer_callback_query(call.id)
+
+    elif data.startswith("like_"):
+        review_id = data.replace("like_", "")
+        if review_id in reviews:
+            if user_id not in reviews[review_id].get("likes", []):
+                reviews[review_id].setdefault("likes", []).append(user_id)
+                save_reviews(reviews)
+                bot.answer_callback_query(call.id, "❤️ Лайк поставлен!")
+            else:
+                bot.answer_callback_query(call.id, "❌ Ты уже лайкнул этот отзыв")
+
+    elif data.startswith("review_"):
+        location = data.replace("review_", "")
+        # Сохраняем текущую локацию в стек
+        push_menu(user_id, "waiting_review", "", None, location)
+        bot.edit_message_text(
+            f"📝 *Оставь отзыв о {location}:*\n\nНапиши, что понравилось или что можно улучшить:\n\n💰 *+5 баллов!*",
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode="Markdown"
+        )
+        bot.send_message(call.message.chat.id, "Напиши свой отзыв (или нажми ❌ Отмена)",
+                         reply_markup=waiting_keyboard())
+        bot.register_next_step_handler_by_chat_id(call.message.chat.id, process_review, location, call.message.chat.id)
+        bot.answer_callback_query(call.id)
+
+    elif data.startswith("back_to_location_"):
+        location = data.replace("back_to_location_", "")
+        text = f"📍 *{location}*\n\nЗдесь ты можешь:\n• 📅 Посмотреть события\n• 💡 Предложить движ\n• 💬 Лента отзывов\n• 📝 Оставить отзыв (+5 баллов)"
+
+        # Убираем клавиатуру "Отмена", если она была
+        bot.send_message(call.message.chat.id, text, parse_mode="Markdown",
+                         reply_markup=location_actions_keyboard(location))
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+        bot.answer_callback_query(call.id)
+
+    elif data == "back_to_locations":
+        user_id = str(call.from_user.id)
+        category = users.get(user_id, {}).get("category", "")
+        text = f"📍 *Выбери локацию в {category}:*"
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown",
+                              reply_markup=locations_keyboard(category))
+        bot.answer_callback_query(call.id)
+
+
+def process_custom_suggestion(message, location, chat_id):
+    if message.text == "❌ Отмена":
+        cancel_handler(message)
+        return
+
+    text = f"✅ *Твоя идея отправлена на модерацию!*\n💰 *+5 баллов за креативность!*"
+    add_points(message.from_user.id, 5, users.get(str(message.from_user.id), {}).get("category", ""))
+
+    # Отправляем результат и возвращаем нормальную клавиатуру
+    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=remove_keyboard())
+    return_to_location(message, location)
+
+
+def process_review(message, location, chat_id):
+    if message.text == "❌ Отмена":
+        cancel_handler(message)
+        return
+
+    review_id = f"review_{datetime.now().timestamp()}"
+    reviews[review_id] = {
+        "location": location,
+        "user_id": str(message.from_user.id),
+        "username": message.from_user.username or message.from_user.first_name,
+        "text": message.text,
+        "likes": [],
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
+    }
+    save_reviews(reviews)
+    add_points(message.from_user.id, 5, users.get(str(message.from_user.id), {}).get("category", ""))
+
+    text = f"✅ *Отзыв опубликован!*\n💰 *+5 баллов начислено!*\n\nПродолжай в том же духе, становись Героем Хаба! 🏆"
+
+    # Отправляем результат и возвращаем нормальную клавиатуру
+    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=remove_keyboard())
+    return_to_location(message, location)
+
+
+# ==================== ЗАПУСК ====================
+if __name__ == "__main__":
+    print("=" * 50)
+    print("🤖 TELEGRAM БОТ ЗАПУЩЕН!")
+    print("=" * 50)
+    print("✅ Бот готов к работе")
+    print("📊 Навигация работает через стек")
+    print("=" * 50)
+    bot.infinity_polling()
